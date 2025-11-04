@@ -1,0 +1,42 @@
+environment_size: [10, 8, 4] # The size of the 3D grid
+num_controlled_drones: 2
+initial_drone_positions: # The start positions of the drones inside the grid
+  - [1, 3, 2]
+  - [1, 6, 2]
+
+initial_drone_uncertainty: 1.0
+  
+goal_positions: # The goal positions for each drone
+  - [9, 2, 2]
+  - [9, 6, 2]
+goal_radius: 0.5
+
+obstacle_positions: # The list of 3D obstacle positions
+  - [5, 6, 3]
+  - [5, 6, 2]
+  - [5, 6, 1]
+  - [5, 6, 0]
+  - [5, 2, 3]
+  - [5, 2, 2]
+  - [5, 2, 1]
+  - [5, 2, 0]
+  - [8, 2, 2]
+  - [8, 6, 2]
+  - [7, 2, 2]
+  - [7, 6, 2]
+  - [3, 2, 1]
+  - [3, 6, 1]
+  - [5, 3, 3]
+  - [5, 4, 3]
+  - [5, 5, 3]
+
+# POMDP model parameters
+step_cost: -1.0
+collision_penalty: -50.0
+goal_reward: 100.0
+discount_factor: 0.98
+max_num_steps: 50 # The maximum number of steps before the problem terminates
+
+transition_noise_std: 0.05
+use_distance_sensor: True
+obs_correct_prob: 0.98

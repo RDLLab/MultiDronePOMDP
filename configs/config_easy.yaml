@@ -1,0 +1,28 @@
+environment_size: [6, 10, 5] # The size of the 3D environment
+num_controlled_drones: 1 # We have one drone in the environment
+initial_drone_positions: # The start positions of the drones inside the environment
+  - [0, 5, 2]
+
+initial_drone_uncertainty: 2.0 
+  
+goal_positions: # The 3D position of the goal area for the
+  - [4, 3, 2]
+
+goal_radius: 0.5 # The radius of the goal areas  
+
+obstacle_positions: # The list of 3D positions of obstacles
+  - [2, 3, 2]
+
+# POMDP model parameters
+transition_noise_std: 0.05
+use_distance_sensor: True # We use the drone's range sensor
+obs_correct_prob: 0.98 # Prob. of recieving the correct observation
+
+step_cost: -1.0
+collision_penalty: -50.0
+goal_reward: 100.0
+discount_factor: 0.98
+max_num_steps: 20 # The maximum number of steps before the problem terminates
+
+
+

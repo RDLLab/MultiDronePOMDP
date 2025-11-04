@@ -1,0 +1,122 @@
+environment_size: [40, 13, 3] # The size of the 3D grid
+num_controlled_drones: 1
+initial_drone_positions: # The start positions of the drones inside the grid
+  - [10, 1.5, 2]
+  - [10, 10.5, 2]
+
+initial_drone_uncertainty: 1.0
+  
+goal_positions: # The goal positions for each drone
+  - [35, 10, 2]
+
+localize_cells:
+  - [2, 1, 1]
+  - [2, 2, 1]
+  - [2, 3, 1]
+
+  - [2, 1, 2]
+  - [2, 2, 2]
+  - [2, 3, 2]
+
+  - [2, 12, 1]
+  - [2, 11, 1]
+  - [2, 10, 1]
+
+  - [2, 12, 2]
+  - [2, 11, 2]
+  - [2, 10, 2]
+
+obstacle_positions: # The list of cells inside the grid that are considered obstacles
+
+  - [30, 0, 0]
+  - [30, 0, 1]
+  - [30, 0, 2]  
+
+  - [30, 3, 0]
+  - [30, 3, 1]
+  - [30, 3, 2]
+
+  - [30, 4, 0]
+  - [30, 4, 1]
+  - [30, 4, 2]
+
+  - [30, 5, 0]
+  - [30, 5, 1]
+  - [30, 5, 2]
+
+  - [30, 6, 0]
+  - [30, 6, 1]
+  - [30, 6, 2]
+
+  - [30, 7, 0]
+  - [30, 7, 1]
+  - [30, 7, 2]
+
+  - [30, 8, 0]
+  - [30, 8, 1]
+  - [30, 8, 2]
+
+  - [30, 9, 0]
+  - [30, 9, 1]
+  - [30, 9, 2]
+
+  - [30, 11, 0]
+  - [30, 11, 1]
+  - [30, 11, 2]
+
+  - [30, 12, 0]
+  - [30, 12, 1]
+  - [30, 12, 2]
+
+  - [31, 0, 0]
+  - [31, 0, 1]
+  - [31, 0, 2]  
+
+  - [31, 3, 0]
+  - [31, 3, 1]
+  - [31, 3, 2]
+
+  - [31, 4, 0]
+  - [31, 4, 1]
+  - [31, 4, 2]
+
+  - [31, 5, 0]
+  - [31, 5, 1]
+  - [31, 5, 2]
+
+  - [31, 6, 0]
+  - [31, 6, 1]
+  - [31, 6, 2]
+
+  - [31, 7, 0]
+  - [31, 7, 1]
+  - [31, 7, 2]
+
+  - [31, 8, 0]
+  - [31, 8, 1]
+  - [31, 8, 2]
+
+  - [31, 9, 0]
+  - [31, 9, 1]
+  - [31, 9, 2]
+
+  - [31, 11, 0]
+  - [31, 11, 1]
+  - [31, 11, 2]
+
+  - [31, 12, 0]
+  - [31, 12, 1]
+  - [31, 12, 2]
+
+# MDP model parameters
+step_cost: -1.0
+collision_penalty: -50.0
+goal_reward: 100.0
+discount_factor: 0.98
+max_num_steps: 500 # The maximum number of steps before the problem terminates
+goal_radius: 1.0
+
+transition_noise_std: 1e-4
+use_distance_sensor: False
+obs_correct_prob: 0.98
+

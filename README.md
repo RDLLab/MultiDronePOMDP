@@ -1,82 +1,206 @@
-# MultiDroneUnc Simulator
 
-The `MultiDroneUnc` class provides a simple, self-contained MDP formulation for multiple drones operating in a bounded 3D grid with static obstacles and goal regions, while being subject to uncertainties in the outcome of actions. The drones can take actions to move to one of their adjacent cells: If drones are not allowed to change their altitude, each drone can move to one of its `8` neighbor cells in the XY-plane (up, down, left, right, and diagonals). Otherwise, each drone can move to one of its `26` neighbors in 3D space (all adjacent cells except staying in place).
-
+# MultiDrone POMDP Simulator
+This repository contains Python code for a compact MultiDrone POMDP simulator with multiple, centrally controlled drones operating in a 3D world, populated by static obstacles and goal regions, while being subject to uncertainties in the outcome of actions and perceiving observations. 
 
 ## Requirements
 The following Python libraries are required:
  - [NumPy](https://numpy.org/)
+ - [SciPy](https://scipy.org)
  - [PyYAML](https://pypi.org/project/PyYAML/)
  - [SciPy](https://scipy.org/)
  - [Vedo](https://pypi.org/project/vedo/)
+ - [Argparse](https://pypi.org/project/argparse/)
 
-## Usage
-### Defining environments
-To use the ```MultiDroneUnc``` class in ```multi_drone.py``` we have to define a 3D grid environment and set the MDP model parameters.  This is defined in a YAML file, for example ```environment.yaml```. It consists of the following parameters:
+## The MultiDrone POMDP Problem
+The Multi-Drone POMDP models a cooperative navigation problem where multiple drones operate in a bounded 3D environment populated by static obstacles. Each drone starts from a noisy initial position and must navigate to its own goal region (rewarded by a goal reward) while avoiding collisions—with both obstacles and other drones—or leaving the environment (penalized by a collision penalty). Additionally, each step incurs a small motion cost per drone.
 
-- `grid_size`: The size of the 3D grid, i.e., the number of cells in each XYZ dimension
-- `start_positions`: The start position of each drones
-- `goal_positions`: The goal position of each drone 
-- `obstacle_cells`: A list of cells inside the grid that are considered obstacles
-- `change_altitude`: A boolean that indicates whether drones are allowed to change their altitudes
+The **state** of this problem is the joint configuration of all drones in world coordinates:
 
-The MDP model parameters are the following:
+`s_t = [x1, y1, z1, ..., xN, yN, zN] ∈ R^{3N}`,
 
-- `step_cost`: A penalty the drones receive at every step
-- `collision_penalty`: The penality a drone receives upon colliding with an obstacle cell
-- `goal_reward`: The reward a drone receives when reaching its goal
-- `max_num_step`: The maximum number of steps before a run terminates
-- `alpha`: Action uncertainty parameter (see [Action uncertainty parameter alpha](#action-uncertainty-parameter-alpha)) 
+where each component corresponds to the 3D position of one drone.
 
-An example of a yaml configuration file is provided in ```example_environment.yaml```:
-```
-grid_size: [10, 10, 5] # The size of the 3D grid
-start_positions: # The start positions of the drones inside the grid
-  - [0, 2, 2]
-  - [0, 7, 2]
-  
-goal_positions: # The goal positions for each drone
-  - [9, 3, 2]
-  - [9, 6, 2]
+The **actions**  represent discrete 3D motion commands for the drones. Each drone can move in one of 26 possible 3D directions by one unit length. At every step, the joint action for all drones is formed by combining their individual choices, resulting in a total of `26^N` (with `N` being the number of drones) possible joint actions. Given the current position `p_current` of a drone and an action, its next position is thereby defined by 
 
-obstacle_cells: # The list of cells inside the grid that are considered obstacles
-  - [5, 7, 2]
-  - [5, 3, 2]
+`p_next = p_current + u + noise`,
 
-change_altitude: False # Only operate in the XY-plane
+where `u` is the chosen motion vector of the drone corresponding to the action, and `noise` is a random zero-mean Gaussian perturbation vector that models uncertainties in the motion.
 
-# MDP model parameters
-step_cost: -1.0
-collision_penalty: -50.0
-goal_reward: 100.0
-discount_factor: 0.98
-max_num_steps: 100 # The maximum number of steps before the problem terminates
-alpha: 0.5 # Action uncertainty parameter
-```
-Note that the number of start positions must be equal to the number of goal positions. The number of start positions determines the number of drones in the environment.
+Each drone has access to two types of sensors: The first is a noisy range sensor, which provides the drone with an approximate distance to the nearest obstacle in the environment. The second is a localization sensor, which activates when the drone enters designated 3D cells that serve as known reference points. Together, these sensors allow the drones to estimate their position within the environment, combining coarse range information with occasional precise localization cues.
 
-If `change_altitude` is `False`, each drone can move to one of its `8` neighbor cells in the XY-plane (up, down, left, right, and diagonals). Otherwise, each drone can move to one of its `26` neighbors in 3D space (all adjacent cells except staying in place). An action is represented as an integer in the range `[0, A^N - 1]`, where `A` is the number of per-drone actions (`8` or `26`) and `N` is the number of drones. The action integer is decoded into per-drone moves during simulation.
+## MultiDrone POMDP implementation
+The above MultiDrone POMDP problem is implemented as a configurable `MultiDroneEnvironment` in class in `multi_drone_environment.py`, which integrates four modular **generative POMDP model components** that define the stochastic behavior of the simulator, located in `models/multi_drone_model.py`:
 
-#### Action representation
-Actions are represented as integers in the range `[0, A^N - 1]`, where `A` is the number of per-drone actions (`8` or `26`) and `N` is the number of drones. The action integer is decoded into per-drone moves during simulation. For example, with `N = 2` drones restricted to the XY-plane (`A = 8`), there are `8^2 = 64` possible joint actions. If the encoded integer is `17`, this decodes to Drone 0 selecting action `1` (e.g., East) and Drone 1 selecting action `2` (e.g., North-West), meaning both drones move simultaneously in their respective directions.
+- Transition Model (`MultiDroneTransitionModel`): Simulates the drone motion in 3D space given a joint action. It applies drone position updates with process noise and checks for collisions, out-of-bounds moves, and goal completion.
+- Observation Model (`MultiDroneObservationModel`): Produces sensor readings for each drone. This includes noisy range measurements to nearby obstacles and localization cues when a drone enters predefined reference cells. It also computes the likelihood `p(o | s)`, that is, likelihood of seeing an observation, given a state.
+- Initial Belief (`MultiDroneInitialBelief`): Samples initial drone positions around predefined start locations with configurable uniform noise, representing uncertainty in the starting state.
+- Task (`MultiDroneTask`): Defines the reward function and termination conditions.
 
-#### Action uncertainty parameter alpha  
+The `MultiDroneEnvironment` class assumes that actions and observations are encoded as integers, and states are represented as Numpy `ndarray` objects, containing the 3D positions of all drones. `MultiDroneEnvironment` provides the following main functions: 
 
-The parameter `alpha` > 0 controls the uncertainty of drone movements. When a drone selects an intended action, it only succeeds with a probability that depends on the distance from its current cell to the nearest obstacle. The success probability is given by:
+ - `reset() -> np.ndarray`:  
+Resets the environment and returns the initial state.
+ - `step(action_int: int) -> Tuple[np.ndarray, int, float, bool, Dict]:`: 
+Given an integer representing an action, simulates the environment forward by one time step. Internally, this function calls `simulate()` to compute the next state, observation, reward, and termination flag, then updates the environment’s internal state and visualization. It returns:
+        - The next state of the environment.
+        - An integer-encoded observation.
+        - An immediate reward.
+        - A boolean termination flag, indicating whether the environment has entered a terminal state.
+        - An `info` dictionary containing diagnostic details (e.g., collisions, goal reached, out-of-bounds).
+ - `simulate(state: np.ndarray, action_int: int)`: 
+Given a state and an action, this function simulates a single transition without altering the internal environment state. It calls the individual POMDP model components in sequence:
+        - The transition model to compute the next state,
+        - The observation model to generate an observation,
+        - The task to compute the reward and check for termination.
+- `update_plot(belief_particles: Optional[np.ndarray] = None)`: Updates the 3D visualization of the environment. This function refreshes the positions of all drones and can optionally render a set of belief particles as transparent “ghost” drones for visualizing uncertainty. It is typically called after each `step()` to animate the drones’ movement and maintain an up-to-date scene.
+- `show()`: Enters the interactive 3D viewing mode using Vedo. This allows the user to freely inspect the current environment, obstacles, goals, and drone positions after a simulation run has finished.
 
-`p_succ = d / (d + alpha)`
+## Setting up the MultiDroneEnvironment
+To use the `MultiDroneEnvironment` class, we first define a 3D environment inside a YAML configuration file (e.g. `configs/config_simple.yaml`). To define the 3D environment, we can use the following parameters (an example is provided in `configs/config_hard.yaml`):
 
-where `d` is the obstacle distance at the drone’s current location. With probability `1 - p_succ`, the intended move fails and the drone instead executes a different random valid action. A smaller `alpha` makes the motion model closer to deterministic (high success probability even near obstacles), while a larger `alpha` increases stochasticity, reflecting greater motion uncertainty near obstacles.
+  - `environment_size`:  The size of the 3D environment
+  - `num_controlled_drones`: The number of drones operating inside the environment
+  - `obstacle_positions`: A list of 3D obstacle positions in the environment. An obstacle is defined as a simple unit cute.
+  - `goal_positions`: A list of 3D positions of the drone's goal areas, one for each drone
+  - `goal_radius`: The radius of each goal area (we assume that goal areas are modeled as spheres)
+  - ``
 
-### Running a planning loop
-We provide a Python script template in ```run_planner.py``` that instantiates the ```MultiDroneUc``` environment, a dummy planner (**this must be replaced by your own planner**),  and runs a planning loop:
+In the same YAML file, we can configure the initial belief, transition, observation, and reward parameters:
+
+- `initial_drone_positions`: A list of 3D coordinates specifying each drone’s nominal starting position.
+- `initial_drone_uncertainty`: Uncertainty in the initial drone positions. The initial position of each drone will be sampled uniformly between `initial_drone_position - 0.5 * initial_drone_uncertainty` and `start_position + 0.5 * initial_drone_uncertainty` along each axis
+- `transition_noise_std`: The standard deviation of the Gaussian transition error distribution
+- `use_distance_sensor`: Whether the drones should receive observations from their range sensors
+- `localize_cells`: A list of 3D coordinates specifying the positions of localization cells (specified as unit cubes). Each cell acts as a unique reference point that provides a distinct integer observation when a drone enters it.
+- `obs_correct_prob`: The probability that the observation model returns the correct observation. With probability `1 - obs_correct_prob`, a random incorrect observation is returned to simulate sensor noise.
+- `goal_reward`: The reward a drone receives when entering its goal area.
+- `collision_penalty`: The penalty a drone receives when colliding with an obstacle, another drone, or leaves the environment.
+- `step_cost`: A small negative reward incurred at every step to encourage the drones to reach their goals efficiently.
+- `discount_factor`: The discount factor (gamma) of the POMDP.
+- `max_num_steps`: The maximum number of steps before the environment terminates
+
+## Using the MultiDroneEnvironment
+The snippet below demonstrates how to load a YAML configuration, instantiate the Multi-Drone POMDP model components, create the `MultiDroneEnvironment`, and step through a simple episode (provided in ``example_usage.py``).
 
 ```
 import argparse
-from multi_drone import MultiDroneUnc
+import numpy as np
+
+# Import the MultiDroneEnvironment class and the MultiDrone POMDP model components
+from multi_drone_environment import MultiDroneEnvironment
+from models.multi_drone_model import (
+    MultiDroneTransitionModel,
+    MultiDroneObservationModel,
+    MultiDroneInitialBelief,
+    MultiDroneTask
+)
+
+# Setup argparse to load a YAML file from the command line
+parser = argparse.ArgumentParser()
+parser.add_argument('--config', type=str, required=True, help="Path to the yaml configuration file")
+args = parser.parse_args()
+
+# Instantiate the POMDP model components
+transition_model = MultiDroneTransitionModel()
+observation_model = MultiDroneObservationModel()
+initial_belief_model = MultiDroneInitialBelief()
+task_model = MultiDroneTask()
+
+# Instantiate the MultiDroneEnvironment
+env = MultiDroneEnvironment(
+    args.config,
+    transition_model,
+    observation_model,
+    initial_belief_model,
+    task_model,
+)
+
+# Reset environment
+state = env.reset()
+done = False
+
+while not done:
+    # Pick a random action
+    action = np.random.choice(env.num_actions)
+
+    # Apply action to the environment and step it forward
+    next_state, observation, reward, done, info = env.step(action)
+
+    # Update visualization
+    env.update_plot()
+
+print("Done!")    
+
+# Enter interactive 3D viewer
+env.show()
+```
+
+This can be run via
+
+	python example_usage.py --config configs/config_hard.yaml
+
+## Implementing a planner
+	
+To add your own decision-making logic, you can implement a custom **planner** class. A planner is responsible for selecting the next action based on the current **belief state** (i.e., a distribution over possible drone states) and a given planning time budget per step. Every planner must implement the following method:
+
+```
+def plan(self, belief_state, planning_time_per_step: float) -> int:
+    """
+    Select the next action to execute given the current belief.
+
+    Args:
+        belief_state: An instance of BeliefState representing the current belief over states.
+        planning_time_per_step: The time budget (in seconds) available for planning before
+                                the next action must be returned.
+
+    Returns:
+        An integer-encoded action to be executed in the environment.
+    """
+```
+
+The returned integer corresponds to the action across to be exectued in the environment by the main planning loop.
+**Important notes**
+- The planner **must not** call `MultiDroneEnvironment.step()` or `MultiDroneEnvironment.reset()`. These functions are managed externally by the main simulation loop, which handles the interaction between the planner, belief state, and environment.
+- Instead, planners should use `MultiDroneEnvironment.simulate(state, action)`, which performs a single transition **without modifying** the environment’s internal state. This function is essential for sampling-based online planners.
+
+**Example:**
+A minimal example of a valid planner is provided in `planners/dummy_planner.py`
+
+```
+import numpy as np
+from multi_drone_environment import MultiDroneEnvironment
+
+class DummyPlanner:
+    def __init__(self, env: MultiDroneEnvironment, a_param: float = 1.0, b_param: int = 1.0):
+        self._env = env
+        self._a_param = a_param
+        self._b_param = b_param
+        self._num_actions = env.num_actions() # Number of actions
+
+    def plan(self, belief_state, planning_time_per_step: float) -> int:
+        # This planner does not do anything useful and always returns
+        # the integer 0, corresponding to the first available action.
+        return 0
+```
+
+This example serves as a starting point. You can replace the simple `return 0` logic with any planning strategy you prefer—as long as the planner follows the interface described above.
+
+## Using a planner together with the MultiDrone simulator
+
+To solve the MultiDrone POMDP problem using your planner, you can use a simple planning loop (given in `run_planner.py`): 
+```
+import argparse
+from multi_drone_environment import MultiDroneEnvironment
+from models.multi_drone_model import (
+    MultiDroneTransitionModel,    
+    MultiDroneObservationModel,
+    MultiDroneInitialBelief,    
+    MultiDroneTask
+)
+from belief_state import BeliefState
 
 # Replace this with your own online planner
-from dummy_planner import DummyPlanner
+from planners.dummy_planner import DummyPlanner
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config', type=str, required=True, help="Path to the yaml configuration file")
@@ -84,75 +208,158 @@ args = parser.parse_args()
 
 def run(env, planner, planning_time_per_step=1.0):
     # Set the simulator to the initial state
-    current_state = env.reset()
+    current_state = env.reset() # Set the simulator to the initial state
+
+    belief_state = BeliefState(env) # Initialize a belief state
+
     num_steps = 0
     total_discounted_reward = 0.0
     history = []
 
     while True:
         # Use MCTS to plan an action from the current state
-        action = planner.plan(current_state, planning_time_per_step)
+        action = planner.plan(belief_state, planning_time_per_step=planning_time_per_step)
 
         # Apply the action to the environment
-        next_state, reward, done, info = env.step(action)        
+        next_state, observation, reward, done, info = env.step(action) 
+
+        print(f"next state: {next_state}, action {action}, observation: {observation}, reward: {reward}, done: {done}")       
 
         # Accumulate discounted reward
         total_discounted_reward += (env.get_config().discount_factor ** num_steps) * reward
 
         # Log trajectory
-        history.append((current_state, action, reward, next_state, done, info))
+        history.append((current_state, action, observation, reward, next_state, done, info))
+
+        # Update the belief with the action exectued and the observation perceived
+        updated_belief = belief_state.update(action, observation, 1000) 
+
+        # Update visualization
+        if belief_state.belief_particles is not None:
+            # Plot 10 belief particles
+            env.update_plot(belief_state.belief_particles[:10])
+        else:
+            env.update_plot()
 
         # Move forward
         current_state = next_state
-        num_steps += 1
+        num_steps += 1        
 
+        if updated_belief is False:
+            print("Couldn't update belief")
+            break
+
+        # Quit if we reached a terminal state or reached a maximum number of steps
         if done or num_steps >= env.get_config().max_num_steps:
             break
 
-    return total_discounted_reward, history
+    return total_discounted_reward, history, num_steps
 
-# Instantiate the environment with the given config
-env = MultiDroneUnc(args.config)
+# Instantiate the POMDP model components
+transition_model = MultiDroneTransitionModel()
+observation_model = MultiDroneObservationModel()
+initial_belief = MultiDroneInitialBelief()
+task = MultiDroneTask()
+
+# Instantiate the MultiDroneEnvironment with the POMDP models components
+env = MultiDroneEnvironment(
+    args.config,
+    transition_model,
+    observation_model,    
+    initial_belief,
+    task,
+)
 
 # Instantiate the planner
-planner = DummyPlanner(env, a_param=1.0, b_param=2)
+planner = DummyPlanner(env)
 
 # Run the planning loop
-total_discounted_reward, history = run(env, planner, planning_time_per_step=1.0)
-print(f"success: {history[-1][5]['success']}, Total discounted reward: {total_discounted_reward}")
+total_discounted_reward, history, num_steps = run(env, planner, planning_time_per_step=2.0)
+print(f"success: {history[-1][6]['all_reached']}, Total discounted reward: {total_discounted_reward}, num_steps: {num_steps}")
 env.show()
 ```
 
-This can be run via
+The line `from planners.dummy_planner import DummyPlanner` should be replaced with an import of your own planner. This planning loop handles updates of belief states automatically, via the `BeliefState` class. This class implements a particle representation of beliefs that are updated via a Sequential Importance Resampling particle filter. Your planner has access to the particles that represent the current belief via the `BeliefState.belief_particles` attribute.
+
+## Implementing custom POMDP components
+You can extend the simulator by **plugging in your own POMDP components**. Each component is a small Python class that implements a tiny interface, defined in `models/pomdp_interface.py`:
+
+- InitialBelief
+  -   `InitialBelief.sample(env, num_samples) -> np.ndarray`
+    
+- TransitionModel
+  -   `TransitionModel.step(env, state, action) -> (next_state, info)`    
+  -   `TransitionModel.num_actions(num_drones) -> int`
+    
+- ObservationModel
+  -   `ObservationModel.observe(env, state) -> int`    
+  -   `ObservationModel.likelihood(env, observation, state) -> float`
+    
+- TaskModel
+  -   `Task.reward(env, prev_state, action, next_state, info) -> float`    
+  -   `Task.done(env, prev_state, action, next_state, info) -> bool`
+
+**Conventions (important!)**
+States are NumPy arrays of shape `(N, 3)`, while actions and observations are represented as integers. 
+
+**Example: Minimal Custom TransitionModel:**
+Below is the a simple transition model compatible with the `MultiDroneEnvironment`.  
+It moves all drones by the same unit step along +X, +Y, or +Z, with no noise, collision or boundary checks.
+
 ```
-python run_planner.py --config <path to yaml config>
-```
-e.g.,
-```
-python run_planner.py --config example_environment.yaml
+class MyTransitionModel(TransitionModel):
+    """
+    Simplest possible transition model for the MultiDroneEnvironment.
+
+    Each action moves *all drones* by the same unit step along +X, +Y, or +Z.
+    No process noise, no per-drone decoding, no collision or boundary logic.
+    Just pure deterministic motion — perfect for testing and tutorials.
+    """
+
+    def __init__(self):
+        # Define three basic motion directions
+        self.action_vectors = np.array([
+            [1.0, 0.0, 0.0],  # move along +X
+            [0.0, 1.0, 0.0],  # move along +Y
+            [0.0, 0.0, 1.0],  # move along +Z
+        ], dtype=np.float32)
+
+    def num_actions(self, num_drones: int) -> int:
+        # Three discrete actions total
+        return len(self.action_vectors)
+
+    def step(self, env, state: np.ndarray, action_int: int):
+        """
+        Apply the same deterministic motion to all drones.
+
+        Args:
+            env: MultiDroneEnvironment
+            state: (N, 3) world coordinates
+            action_int: integer index in [0, 2]
+        Returns:
+            next_state: (N, 3)
+            info: simple dict
+        """
+        assert 0 <= action_int < len(self.action_vectors)
+        direction = self.action_vectors[action_int]
+
+        # Move each drone along the chosen axis
+        next_state = state + direction        
+        return next_state, {}
 ```
 
-###  Implementing and using your an online planner
-To implement your own planner, you must provide a Python class which implements the following functions:
-1. ```def __init__(env: MultiDroneUnc)```: This is a constructor that takes an instance of the MultiDroneUnc environment as an argument. You can also specify additional parameters for your planner here, e.g., ```def __init__(env: MultiDroneUnc, a_param: float = 1.0, b_param: int = 2)```.
+To use a custom model, instantiate it, and pass it to the constructor of `MultiDroneEnvironment`:
 
-2. ```def plan(self, current_state: np.ndarray, planning_time_per_step: float) -> int```: This function should plan an action for a given state within the given ```planning_time_per_step``` (in seconds), and return an integer that represents the action.
-
-To use your planner within the planning loop template above, replace the line ```from dummy_planner import DummyPlanner``` with the import of your own planner, e.g., ```from my_planner import MyPlanner```. Additionally, replace the line ```planner = DummyPlanner(env, a_param=1.0, b_param=1.0)``` with ```planner = MyPlanner(env, a_param=1.0, b_param=1.0)``` to instantiate your planner.
-
-###  Usage of the MultiEnvUnc class
-After implementing the constructor of your planner as above, your planner has access to an instance of the MultiEnvUnc class. This class provides the following functions that your planner can use:
-
-- ```MultiDroneUnc.simulate(state: np.ndarray, action: int)```: This function implements the **generative model** of the underlying MDP. It takes a state, an action, and simulates a next state, reward and a terminal signal for one step. This is returned as a ```Tuple[np.ndarray, float, bool, Dict]```. The last entry of the tuple is a dictionary containing useful information, e.g., if a collision occured during the one-step simulation.
-- ```MultiDroneUnc.get_config()```: Returns the configuration data class defined in ```multi_done_config.py```. This provides you with accessible configuration attributes. For instance, ```MultiDroneUnc.get_config().discount_factor``` gives the discount factor of the problem.
-- ```MultiDroneUnc.num_actions()```: The number of actions of the underlying MDP. The number of actions is automatically computed from the yaml config file
-
-Your online planner should **only** rely on the above function. Additionally, the class provides functions for resetting the simulator, applying an action, and visualisation. These functions are used by the planning loop.
-## Preparing your submission
-To prepare your submission, create a copy of the ```run_planner.py``` script in the same folder, and rename it to ```run_UID.py```, where UID is your student ID. Inside this script, modify the import and instantiation of your planner as described in [Implementing and using your an online planner](#implementing-and-using-your-an-online-planner). This script has to be runnable via
 ```
-python run_UID.py --config <environment_yaml_file>
+my_transition_model = MyTransitionModel()
+env = MultDroneEnvironment(
+	...,
+	my_transition_model,
+	...
+)
 ```
+
+
 
 
 
