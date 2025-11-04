@@ -28,7 +28,7 @@ where `u` is the chosen motion vector of the drone corresponding to the action, 
 
 Each drone has access to two types of sensors: The first is a noisy range sensor, which provides the drone with an approximate distance to the nearest obstacle in the environment. The second is a localization sensor, which activates when the drone enters designated 3D cells that serve as known reference points. Together, these sensors allow the drones to estimate their position within the environment, combining coarse range information with occasional precise localization cues.
 
-## MultiDrone POMDP implementation
+## MultiDrone POMDP Implementation
 The above MultiDrone POMDP problem is implemented as a configurable `MultiDroneEnvironment` in class in `multi_drone_environment.py`, which integrates four modular **generative POMDP model components** that define the stochastic behavior of the simulator, located in `models/multi_drone_model.py`:
 
 - Transition Model (`MultiDroneTransitionModel`): Simulates the drone motion in 3D space given a joint action. It applies drone position updates with process noise and checks for collisions, out-of-bounds moves, and goal completion.
@@ -55,7 +55,7 @@ Given a state and an action, this function simulates a single transition without
 - `update_plot(belief_particles: Optional[np.ndarray] = None)`: Updates the 3D visualization of the environment. This function refreshes the positions of all drones and can optionally render a set of belief particles as transparent “ghost” drones for visualizing uncertainty. It is typically called after each `step()` to animate the drones’ movement and maintain an up-to-date scene.
 - `show()`: Enters the interactive 3D viewing mode using Vedo. This allows the user to freely inspect the current environment, obstacles, goals, and drone positions after a simulation run has finished.
 
-## Setting up the MultiDroneEnvironment
+## Setting Up the MultiDroneEnvironment
 To use the `MultiDroneEnvironment` class, we first define a 3D environment inside a YAML configuration file (e.g. `configs/config_simple.yaml`). To define the 3D environment, we can use the following parameters (an example is provided in `configs/config_hard.yaml`):
 
   - `environment_size`:  The size of the 3D environment
@@ -63,7 +63,6 @@ To use the `MultiDroneEnvironment` class, we first define a 3D environment insid
   - `obstacle_positions`: A list of 3D obstacle positions in the environment. An obstacle is defined as a simple unit cute.
   - `goal_positions`: A list of 3D positions of the drone's goal areas, one for each drone
   - `goal_radius`: The radius of each goal area (we assume that goal areas are modeled as spheres)
-  - ``
 
 In the same YAML file, we can configure the initial belief, transition, observation, and reward parameters:
 
@@ -121,7 +120,7 @@ done = False
 
 while not done:
     # Pick a random action
-    action = np.random.choice(env.num_actions)
+    action = np.random.choice(env.num_actions())
 
     # Apply action to the environment and step it forward
     next_state, observation, reward, done, info = env.step(action)
@@ -139,7 +138,7 @@ This can be run via
 
 	python example_usage.py --config configs/config_hard.yaml
 
-## Implementing a planner
+## Implementing a Planner
 	
 To add your own decision-making logic, you can implement a custom **planner** class. A planner is responsible for selecting the next action based on the current **belief state** (i.e., a distribution over possible drone states) and a given planning time budget per step. Every planner must implement the following method:
 
@@ -185,7 +184,7 @@ class DummyPlanner:
 
 This example serves as a starting point. You can replace the simple `return 0` logic with any planning strategy you prefer—as long as the planner follows the interface described above.
 
-## Using a planner together with the MultiDrone simulator
+## Using a Planner Together with the MultiDrone Simulator
 
 To solve the MultiDrone POMDP problem using your planner, you can use a simple planning loop (given in `run_planner.py`): 
 ```
@@ -281,7 +280,7 @@ env.show()
 
 The line `from planners.dummy_planner import DummyPlanner` should be replaced with an import of your own planner. This planning loop handles updates of belief states automatically, via the `BeliefState` class. This class implements a particle representation of beliefs that are updated via a Sequential Importance Resampling particle filter. Your planner has access to the particles that represent the current belief via the `BeliefState.belief_particles` attribute.
 
-## Implementing custom POMDP components
+## Implementing Custom POMDP Components
 You can extend the simulator by **plugging in your own POMDP components**. Each component is a small Python class that implements a tiny interface, defined in `models/pomdp_interface.py`:
 
 - InitialBelief
@@ -352,7 +351,7 @@ To use a custom model, instantiate it, and pass it to the constructor of `MultiD
 
 ```
 my_transition_model = MyTransitionModel()
-env = MultDroneEnvironment(
+env = MultiDroneEnvironment(
 	...,
 	my_transition_model,
 	...
