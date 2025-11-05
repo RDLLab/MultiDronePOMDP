@@ -4,12 +4,11 @@ This repository contains Python code for a compact MultiDrone POMDP simulator wi
 
 ## Requirements
 The following Python libraries are required:
- - [NumPy](https://numpy.org/)
- - [SciPy](https://scipy.org)
- - [PyYAML](https://pypi.org/project/PyYAML/)
- - [SciPy](https://scipy.org/)
- - [Vedo](https://pypi.org/project/vedo/)
- - [Argparse](https://pypi.org/project/argparse/)
+ - [NumPy](https://numpy.org/) (version >= 2.3.4)
+ - [SciPy](https://scipy.org) (version >= 1.16.3)
+ - [PyYAML](https://pypi.org/project/PyYAML/) (version >= 6.0)
+ - [SciPy](https://scipy.org/) (version >= 1.16.3)
+ - [Vedo](https://pypi.org/project/vedo/) (version >= 2025.5.4)
 
 ## The MultiDrone POMDP Problem
 The Multi-Drone POMDP models a cooperative navigation problem where multiple drones operate in a bounded 3D environment populated by static obstacles. Each drone starts from a noisy initial position and must navigate to its own goal region (rewarded by a goal reward) while avoiding collisions—with both obstacles and other drones—or leaving the environment (penalized by a collision penalty). Additionally, each step incurs a small motion cost per drone.
