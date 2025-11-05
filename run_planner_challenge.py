@@ -1,4 +1,5 @@
 import argparse
+import time
 from multi_drone_environment import MultiDroneEnvironment
 from models.multi_drone_model import (
     MultiDroneTransitionModel,    
@@ -27,7 +28,12 @@ def run(env, planner, planning_time_per_step=1.0):
 
     while True:
         # Use MCTS to plan an action from the current state
+        plan_start_time = time.time()
         action = planner.plan(belief_state, planning_time_per_step=planning_time_per_step)
+        elapsed = time.time() - plan_start_time
+        if elapsed > planning_time_per_step + 0.5:
+            print("PLANNING TIME EXCEEDED!!!!!!!!!!!")
+            break
 
         # Apply the action to the environment
         next_state, observation, reward, done, info = env.step(action) 
@@ -84,5 +90,8 @@ planner = DummyPlanner(env)
 
 # Run the planning loop
 total_discounted_reward, history, num_steps = run(env, planner, planning_time_per_step=2.0)
-print(f"success: {history[-1][6]['all_reached']}, Total discounted reward: {total_discounted_reward}, num_steps: {num_steps}")
+if len(history) > 0:
+    print(f"success: {history[-1][6]['all_reached']}, Total discounted reward: {total_discounted_reward}, num_steps: {num_steps}")
+else:
+    print(f"success: false")
 env.show()
