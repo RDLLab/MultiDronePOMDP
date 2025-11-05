@@ -384,44 +384,64 @@ class MultiDroneInitialBelief(InitialBelief):
 
 class MultiDroneMixtureInitialBelief(InitialBelief):
     """
-    Initial belief sampler for a single drone with two possible start regions.
+    Initial belief sampler for N drones with per-drone bimodal (2-component) uniform mixtures.
 
-    - Expects exactly two start positions in `env.cfg.initial_drone_positions`.
-    - Each start region is chosen with equal probability (50/50).
-    - Adds uniform cube noise of side length `start_noise_range` around each.
-    - Clips to env bounds derived from `environment_size`.
+    Config expectations (env.cfg):
+      - initial_drone_positions: List[List[float]] of length N
+          Each entry is a 6-vector: [x1, y1, z1, x2, y2, z2]
+          where (x1,y1,z1) is the center of component 0 and (x2,y2,z2) is the center of component 1
+          for that specific drone.
+      - initial_drone_uncertainty: float or [3]
+          Half-width(s) of the uniform cube noise added around the chosen component center (meters).
+          If a float, the same half-width is used for x/y/z. If [3], it’s per-axis.
+      - environment_size: (X, Y, Z)
+          Used to clip samples to [0, size - 1e-3].
+
+    Behavior:
+      - For each sample and each drone, we choose component 0 or 1 with equal probability (50/50).
+      - We add uniform cube noise in [-half_width, +half_width] per axis.
+      - We clip to environment bounds.
+      - Returns an array of shape (num_samples, N, 3) in world coordinates (floats).
     """
 
     def sample(self, env, num_samples: int) -> np.ndarray:
-        # Validate config
-        initial_drone_positions = np.array(env.cfg.initial_drone_positions, dtype=np.float32)
-        assert len(initial_drone_positions) == 2, (
-            f"Expected exactly two start positions, got {len(initial_drone_positions)}"
-        )
+        # ----- Parse and validate per-drone 2-component centers -----
+        raw_positions = np.asarray(env.cfg.initial_drone_positions, dtype=np.float32)  # expected (N, 6)
+        assert raw_positions.ndim == 2 and raw_positions.shape[1] == 6, \
+            f"`initial_drone_positions` must be (N, 6); got {raw_positions.shape}"
 
-        noise_range_m = env.cfg.initial_drone_uncertainty
-        grid_size = np.array(env.cfg.environment_size, dtype=np.float32)
-        world_extent_xyz = grid_size
+        num_drones = raw_positions.shape[0]
+        # Reshape to (N, 2, 3): per-drone [component, xyz]
+        centers_per_drone = raw_positions.reshape(num_drones, 2, 3)
 
-        # Randomly assign half of samples to each start position
-        # (or as close to half as possible)
-        indices = env.rng.integers(0, 2, size=(num_samples,))
-        base_positions = initial_drone_positions[indices]  # (num_samples, 3)
+        # ----- Noise half-width handling (float -> isotropic; [3] -> per-axis) -----
+        noise_half_width = np.asarray(getattr(env.cfg, "initial_drone_uncertainty", 0.5), dtype=np.float32)
+        if noise_half_width.ndim == 0:
+            noise_half_width = np.full((3,), float(noise_half_width), dtype=np.float32)
+        assert noise_half_width.shape == (3,), \
+            "`initial_drone_uncertainty` must be a float or a length-3 iterable"
 
-        # Add uniform cube noise
-        noise = env.rng.uniform(
-            low=-0.5 * noise_range_m,
-            high=0.5 * noise_range_m,
-            size=(num_samples, 3),
-        ).astype(np.float32)
+        # ----- Equal-probability component choice per (sample, drone) -----
+        # comp_choices[s, d] ∈ {0, 1}
+        comp_choices = env.rng.integers(0, 2, size=(num_samples, num_drones), dtype=np.int32)
 
-        samples_world = base_positions + noise
+        # Gather chosen centers into (num_samples, N, 3)
+        centers_expanded = centers_per_drone[None, :, :, :]         # (1, N, 2, 3)
+        comp_expanded    = comp_choices[:, :, None, None]           # (S, N, 1, 1)
+        base_positions   = np.take_along_axis(centers_expanded, comp_expanded, axis=2).squeeze(2)  # (S, N, 3)
 
-        # Clip to environment bounds in
+        # ----- Uniform cube noise per sample/drone/axis -----
+        low  = (-noise_half_width)[None, None, :]  # (1,1,3)
+        high = ( noise_half_width)[None, None, :]  # (1,1,3)
+        noise = env.rng.uniform(low=low, high=high, size=(num_samples, num_drones, 3)).astype(np.float32)
+
+        samples_world = base_positions + noise  # (S, N, 3)
+
+        # ----- Clip to environment bounds -----
+        world_extent_xyz = np.asarray(env.cfg.environment_size, dtype=np.float32)  # (3,)
         samples_world = np.clip(samples_world, 0.0, world_extent_xyz - 1e-3)
 
-        # Reshape to match expected return shape: (num_samples, 1, 3)
-        return samples_world[:, None, :].astype(np.float32, copy=False)
+        return samples_world.astype(np.float32, copy=False)
 
 # ---------- Task (reward + termination) ----------
 class MultiDroneTask(Task):

@@ -3,7 +3,8 @@ from multi_drone_environment import MultiDroneEnvironment
 from models.multi_drone_model import (
     MultiDroneTransitionModel,    
     MultiDroneObservationModel,
-    MultiDroneInitialBelief,    
+    MultiDroneInitialBelief,
+    MultiDroneMixtureInitialBelief,
     MultiDroneTask
 )
 from belief_state import BeliefState
