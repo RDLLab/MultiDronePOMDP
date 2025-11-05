@@ -151,19 +151,17 @@ class MultiDroneObservationModel(ObservationModel):
     The joint observation is an integer in base-K with K = (#ID-symbols + #distance-symbols).
     Out-of-bounds or obstacle cells yield a single terminal observation (-1).
     """
-
     def __init__(self):
-        self._obs_lut_ready = False  # Build caches on first use       
+        self._obs_lut_ready = False
 
     # ----------------------------- LUT build ----------------------------- #
     def _ensure_obs_lut(self, env) -> None:
-        """Build and cache: distance field, unique ID list, distance symbols, and base K."""
         if self._obs_lut_ready:
             return
         if not hasattr(env, "obstacles") or not hasattr(env, "localize_ids"):
             raise ValueError("env.obstacles and env.localize_ids are required.")
 
-        # Distance field over free space (True=free → 1 for EDT input)
+        # Distance field (free=True → 1 for EDT input)
         free_space_mask_uint8 = (~env.obstacles).astype(np.uint8)
         self.dist_field = distance_transform_edt(free_space_mask_uint8)
 
@@ -172,48 +170,72 @@ class MultiDroneObservationModel(ObservationModel):
         self.localize_ids_sorted = (
             np.unique(localize_ids_flat) if localize_ids_flat.size > 0 else np.empty((0,), dtype=np.int32)
         )
-        num_localize_symbols = int(self.localize_ids_sorted.size)
+        num_localize_ids = int(self.localize_ids_sorted.size)
 
-        # Distance symbols: bit-cast float32 EDT values to uint32 for exact matching.
-        if not np.any(env.obstacles):
-            # No obstacles → EDT is zero everywhere → single distance symbol (if used)
-            self.dist_field = np.zeros_like(self.dist_field, dtype=np.float32)
-            self.distance_bits_sorted = np.array([0], dtype=np.uint32)
-        else:
-            edt_as_bits = self.dist_field.astype(np.float32).view(np.uint32)
-            unique_bits = np.unique(edt_as_bits)
-            self.distance_bits_sorted = unique_bits if unique_bits.size > 0 else np.array([0], dtype=np.uint32)
-
-        # Symbol layout per drone:
-        #   [0 .. num_localize_symbols-1] → ID symbols
-        #   [num_localize_symbols .. K-1] → distance symbols (only if use_distance_sensor)
-        self.distance_symbol_offset = num_localize_symbols
+        # Distance symbols (if used)
         if env.cfg.use_distance_sensor:
-            self.obs_base_K = num_localize_symbols + int(self.distance_bits_sorted.size)
+            if not np.any(env.obstacles):
+                # Single distance symbol (all zeros)
+                self.dist_field = self.dist_field.astype(np.float32, copy=False)
+                self.distance_bits_sorted = np.array([0], dtype=np.uint32)
+            else:
+                edt_bits = self.dist_field.astype(np.float32, copy=False).view(np.uint32)
+                unique_bits = np.unique(edt_bits)
+                self.distance_bits_sorted = unique_bits if unique_bits.size > 0 else np.array([0], dtype=np.uint32)
+            num_distance_symbols = int(self.distance_bits_sorted.size)
         else:
-            self.obs_base_K = num_localize_symbols
-        if self.obs_base_K < 1:
-            raise ValueError("Observation base K must be >= 1.")
+            self.distance_bits_sorted = np.array([], dtype=np.uint32)
+            num_distance_symbols = 0
+
+        # ---------------- Symbol layout & base K ----------------
+        # IDs-only mode: reserve per-drone symbol 0 for "no ID"
+        #   per-drone symbols: 0 (no-ID), 1..num_localize_ids (IDs)
+        #   K = max(1 + num_localize_ids, 1)  -> if no IDs exist anywhere, K=1 (only symbol 0)
+        if not env.cfg.use_distance_sensor:
+            self.id_offset = 1  # IDs start at symbol 1
+            self.distance_symbol_offset = None
+            self.obs_base_K = max(1 + num_localize_ids, 1)
+        else:
+            # Distance-enabled mode (unchanged layout):
+            #   IDs: 0 .. num_localize_ids-1
+            #   Dist: num_localize_ids .. num_localize_ids + num_distance_symbols - 1
+            self.id_offset = 0
+            self.distance_symbol_offset = num_localize_ids
+            self.obs_base_K = num_localize_ids + num_distance_symbols
+            if self.obs_base_K < 1:
+                # no IDs and no distance symbols (shouldn't happen, but guard anyway)
+                self.obs_base_K = 1  # yields only code 0 as non-terminal
 
         self._obs_lut_ready = True
 
     # ---------------------- Deterministic mapping h(s) ------------------- #
     def _deterministic_observation(self, env, state_world_m: np.ndarray) -> int | None:
         """
-        Map state to a joint base-K code.
-        Returns None for terminal (OOB or obstacle).
+        Returns the joint base-K code for non-terminal states.
+        Returns None only if terminal (OOB, obstacle, or ALL drones at goal).
         """
         self._ensure_obs_lut(env)
 
         grid_size_x, grid_size_y, grid_size_z = env.cfg.environment_size
         num_drones = int(env.cfg.num_controlled_drones)
 
-        # nearest GRID cell (voxel_size == 1 ⇒ round to nearest)
+        # ---- NEW: terminal if all drones are currently inside their goal areas ----
+        if hasattr(env, "goal_centers") and hasattr(env.cfg, "goal_radius"):
+            goal_centers_world = env.goal_centers  # shape (N,3)
+            goal_radius_m = float(env.cfg.goal_radius)
+            # Guard shapes lightly
+            if goal_centers_world.shape == (num_drones, 3):
+                at_goal_now = (np.linalg.norm(state_world_m - goal_centers_world, axis=1) <= goal_radius_m)
+                if bool(np.all(at_goal_now)):
+                    return None
+        # ---------------------------------------------------------------------------
+
+        # nearest GRID cell (voxel_size == 1)
         cell_indices = np.floor(state_world_m + 0.5).astype(np.int32)
         if cell_indices.shape != (num_drones, 3):
             raise ValueError(f"`state_world_m` must be shape ({num_drones}, 3).")
 
-        # Out of bounds?
+        # Terminal checks: OOB or obstacle → None
         oob = (
             (cell_indices[:, 0] < 0) | (cell_indices[:, 0] >= grid_size_x) |
             (cell_indices[:, 1] < 0) | (cell_indices[:, 1] >= grid_size_y) |
@@ -221,84 +243,98 @@ class MultiDroneObservationModel(ObservationModel):
         )
         if np.any(oob):
             return None
-
         cx, cy, cz = cell_indices[:, 0], cell_indices[:, 1], cell_indices[:, 2]
-
-        # Inside an obstacle?
         if np.any(env.obstacles[cx, cy, cz]):
             return None
 
-        # Per-drone symbols
+        # Per-drone symbol assembly
         per_drone_symbols = np.empty(num_drones, dtype=np.int32)
-
-        # ID branch
         localize_ids_here = env.localize_ids[cx, cy, cz]  # -1 where none
         has_id = (localize_ids_here >= 0)
-        if np.any(has_id):
-            if self.localize_ids_sorted.size == 0:
-                return None
-            id_idx = np.searchsorted(self.localize_ids_sorted, localize_ids_here[has_id])
-            # Exact match required (guards against stale LUTs)
-            if not np.all(self.localize_ids_sorted[id_idx] == localize_ids_here[has_id]):
-                return None
-            per_drone_symbols[has_id] = id_idx.astype(np.int32)
 
-        # Distance branch (only if enabled)
-        no_id = ~has_id
-        if np.any(no_id):
-            if env.cfg.use_distance_sensor:
+        if env.cfg.use_distance_sensor:
+            # -------- Distance-enabled mode (as before) --------
+            # IDs band (0..S_ID-1)
+            if np.any(has_id):
+                if self.localize_ids_sorted.size == 0:
+                    # shouldn't happen, but if LUT empty, treat as non-ID (fallback to distance)
+                    has_id = np.zeros_like(has_id, dtype=bool)
+                else:
+                    id_idx = np.searchsorted(self.localize_ids_sorted, localize_ids_here[has_id])
+                    if not np.all(self.localize_ids_sorted[id_idx] == localize_ids_here[has_id]):
+                        # stale LUT or map changed -> treat as non-ID (fallback to distance)
+                        mask = has_id.copy()
+                        mask[has_id] = False
+                        has_id = mask
+                    else:
+                        per_drone_symbols[has_id] = (self.id_offset + id_idx.astype(np.int32))
+
+            # Distance band (S_ID .. S_ID+num_dist-1)
+            no_id = ~has_id
+            if np.any(no_id):
                 d = self.dist_field[cx[no_id], cy[no_id], cz[no_id]].astype(np.float32, copy=False)
                 d_bits = d.view(np.uint32)
                 d_idx = np.searchsorted(self.distance_bits_sorted, d_bits)
+                # guard against mismatch
                 if not np.all(self.distance_bits_sorted[d_idx] == d_bits):
-                    return None
+                    # if mismatch (shouldn't happen), just clamp to first distance symbol
+                    d_idx = np.zeros_like(d_idx, dtype=np.int32)
                 per_drone_symbols[no_id] = (self.distance_symbol_offset + d_idx.astype(np.int32))
-            else:
-                # IDs-only mode: treat no-ID cells as terminal
-                return None
 
-        # Base-K encode
+        else:
+            # -------- IDs-only mode with default=0 (non-terminal) --------
+            # Default per-drone symbol = 0 when there is no ID at the cell.
+            per_drone_symbols.fill(0)
+            if np.any(has_id) and self.localize_ids_sorted.size > 0:
+                id_idx = np.searchsorted(self.localize_ids_sorted, localize_ids_here[has_id])
+                # only accept exact matches; otherwise keep default 0
+                exact = (self.localize_ids_sorted[id_idx] == localize_ids_here[has_id])
+                per_drone_symbols[has_id] = 0  # start from default
+                if np.any(exact):
+                    # IDs start at symbol 1 (reserve 0 for default)
+                    per_drone_symbols[has_id.nonzero()[0][exact]] = (self.id_offset + id_idx[exact].astype(np.int32))
+
+        # Base-K pack
         joint_code = 0
+        K = int(self.obs_base_K)
         for symbol in per_drone_symbols.astype(np.int64):
-            joint_code = joint_code * self.obs_base_K + int(symbol)
+            joint_code = joint_code * K + int(symbol)
         return int(joint_code)
 
     # ------------------------------ Observe ------------------------------ #
     def observe(self, env, state: np.ndarray) -> int:
         """
-        Sample an observation.
-        - Terminal states observe -1.
-        - Else: return h(s) with prob p, otherwise a different code uniformly.
+        Sample an observation:
+          - Terminal: -1
+          - Non-terminal: h(s) with prob p, otherwise a different code uniformly in [0, K^N - 1] \ {h(s)}.
         """
-        prob_correct = float(np.clip(env.cfg.obs_correct_prob, 0.0, 1.0))
+        p = float(np.clip(env.cfg.obs_correct_prob, 0.0, 1.0))
         det_code = self._deterministic_observation(env, state)
         if det_code is None:
-            return -1
+            return -1  # only terminal emits -1
 
         num_drones = int(env.cfg.num_controlled_drones)
         joint_space = self.obs_base_K ** num_drones
 
-        if joint_space <= 1 or prob_correct >= 1.0:
+        if joint_space <= 1 or p >= 1.0:
             return det_code
 
         rng = getattr(env, "rng", np.random.default_rng())
-        if rng.random() < prob_correct:
+        if rng.random() < p:
             return det_code
 
-        # Uniform over all other codes
-        draw = int(rng.integers(0, joint_space - 1))  # [0, joint_space-2]
+        draw = int(rng.integers(0, joint_space - 1))
         return draw if draw < det_code else draw + 1
 
     # ----------------------------- Likelihood ---------------------------- #
     def likelihood(self, env, observation: int, state_world_m: np.ndarray) -> float:
         """
-        Exact P(o | s) under the same joint-level noise.
+        Exact P(o|s) for the same joint-level noise model.
         """
-        prob_correct = float(np.clip(env.cfg.obs_correct_prob, 0.0, 1.0))
+        p = float(np.clip(env.cfg.obs_correct_prob, 0.0, 1.0))
         det_code = self._deterministic_observation(env, state_world_m)
         obs_code = int(observation)
 
-        # Terminal states are deterministic
         if det_code is None:
             return 1.0 if obs_code == -1 else 0.0
 
@@ -308,10 +344,11 @@ class MultiDroneObservationModel(ObservationModel):
         if joint_space <= 1:
             return 1.0 if obs_code == det_code else 0.0
         if obs_code == -1:
-            return 0.0  # non-terminal cannot emit terminal token
+            return 0.0
         if obs_code == det_code:
-            return prob_correct
-        return (1.0 - prob_correct) / float(joint_space - 1)
+            return p
+        return (1.0 - p) / float(joint_space - 1)
+
 
 
 # ---------- Initial belief ----------
